@@ -1,3 +1,4 @@
+use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -411,6 +412,38 @@ fn resolve_ffprobe_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     find_ffprobe_on_path().ok_or_else(|| "ERR_FFMPEG_NOT_FOUND: ffprobe が見つかりません".to_string())
 }
 
+fn run_ffmpeg_thumbnail(
+    ffmpeg_executable: &Path,
+    input_path: &Path,
+    output_path: &Path,
+    seek_seconds: u32,
+) -> Result<(), String> {
+    let output = Command::new(ffmpeg_executable)
+        .arg("-y")
+        .arg("-ss")
+        .arg(seek_seconds.to_string())
+        .arg("-i")
+        .arg(input_path)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-vf")
+        .arg("scale=640:-1")
+        .arg("-q:v")
+        .arg("4")
+        .arg(output_path)
+        .output()
+        .map_err(|error| format!("サムネイル生成起動失敗: {error}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "サムネイル生成失敗: {}",
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
 #[tauri::command]
 fn pick_input_file() -> Option<String> {
     let selected = rfd::FileDialog::new()
@@ -435,6 +468,37 @@ async fn probe_video(app: tauri::AppHandle, input_path: String) -> Result<ProbeR
     }
     let ffprobe = resolve_ffprobe_path(&app)?;
     run_ffprobe(&ffprobe, &input)
+}
+
+#[tauri::command]
+async fn generate_thumbnail(app: tauri::AppHandle, input_path: String) -> Result<String, String> {
+    let input = PathBuf::from(input_path);
+    if !input.exists() {
+        return Err("入力ファイルが存在しません".to_string());
+    }
+
+    let ready = ensure_ffmpeg_internal(&app).await?;
+    let ffmpeg_executable = resolve_ffmpeg_executable_path(&app, &ready.ffmpeg_path)?;
+
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("app_cache_dir 解決失敗: {error}"))?;
+    let thumb_dir = cache_dir.join("thumbnails");
+    fs::create_dir_all(&thumb_dir).map_err(|error| format!("サムネイルフォルダ作成失敗: {error}"))?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(input.to_string_lossy().as_bytes());
+    let filename = format!("{:x}.jpg", hasher.finalize());
+    let thumbnail_path = thumb_dir.join(filename);
+
+    if run_ffmpeg_thumbnail(&ffmpeg_executable, &input, &thumbnail_path, 1).is_err() {
+        run_ffmpeg_thumbnail(&ffmpeg_executable, &input, &thumbnail_path, 0)?;
+    }
+
+    let bytes = fs::read(&thumbnail_path).map_err(|error| format!("サムネイル読み取り失敗: {error}"))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:image/jpeg;base64,{encoded}"))
 }
 
 #[tauri::command]
@@ -606,6 +670,7 @@ pub fn run() {
             pick_input_file,
             ensure_ffmpeg_ready,
             probe_video,
+            generate_thumbnail,
             preview_convert_command,
             run_convert,
             cancel_convert

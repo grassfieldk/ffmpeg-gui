@@ -48,6 +48,7 @@ const resolutionMap: Record<string, { width: number; height: number }> = {
 
 const elements = {
   dropZone: document.querySelector<HTMLLabelElement>("#drop-zone")!,
+  fileSelectButton: document.querySelector<HTMLButtonElement>("#file-select-button")!,
   fileInput: document.querySelector<HTMLInputElement>("#file-input")!,
   fileName: document.querySelector<HTMLParagraphElement>("#file-name")!,
   preset: document.querySelector<HTMLSelectElement>("#preset")!,
@@ -60,13 +61,10 @@ const elements = {
   audioFormat: document.querySelector<HTMLSelectElement>("#audio-format")!,
   audioBitrate: document.querySelector<HTMLInputElement>("#audio-bitrate")!,
   crf: document.querySelector<HTMLInputElement>("#crf")!,
-  extension: document.querySelector<HTMLInputElement>("#extension")!,
-  setupButton: document.querySelector<HTMLButtonElement>("#setup-button")!,
-  previewButton: document.querySelector<HTMLButtonElement>("#preview-button")!,
-  convertButton: document.querySelector<HTMLButtonElement>("#convert-button")!,
-  cancelButton: document.querySelector<HTMLButtonElement>("#cancel-button")!,
+  actionButton: document.querySelector<HTMLButtonElement>("#action-button")!,
   progress: document.querySelector<HTMLProgressElement>("#progress")!,
-  progressText: document.querySelector<HTMLSpanElement>("#progress-text")!,
+  thumbnailImage: document.querySelector<HTMLImageElement>("#thumbnail-image")!,
+  thumbnailEmpty: document.querySelector<HTMLParagraphElement>("#thumbnail-empty")!,
   log: document.querySelector<HTMLPreElement>("#log")!
 };
 
@@ -78,16 +76,13 @@ function appendLog(message: string): void {
 
 function setConvertingState(value: boolean): void {
   appState.converting = value;
-  elements.convertButton.disabled = value;
-  elements.previewButton.disabled = value;
-  elements.setupButton.disabled = value;
-  elements.cancelButton.disabled = !value;
+  elements.actionButton.textContent = value ? "変換をキャンセル" : "変換を実行";
+  elements.actionButton.classList.toggle("danger", value);
 }
 
 function setProgress(value: number): void {
   const safeValue = Math.max(0, Math.min(100, value));
   elements.progress.value = safeValue;
-  elements.progressText.textContent = `${safeValue.toFixed(1)}%`;
 }
 
 function parseTimestampToSeconds(value: string): number {
@@ -190,7 +185,7 @@ function getCurrentOptions(): ConvertOptions {
     audioFormat: elements.audioFormat.value,
     audioBitrateK: Number(elements.audioBitrate.value),
     crf: Number(elements.crf.value),
-    outputExt: elements.extension.value
+    outputExt: "mp4"
   };
 }
 
@@ -203,7 +198,6 @@ function setOptions(options: ConvertOptions): void {
   elements.audioFormat.value = options.audioFormat;
   elements.audioBitrate.value = String(options.audioBitrateK);
   elements.crf.value = String(options.crf);
-  elements.extension.value = options.outputExt.toLowerCase();
 }
 
 function applyPreset(preset: string): void {
@@ -215,7 +209,6 @@ function applyPreset(preset: string): void {
   if (preset === "edit") {
     next.fpsMode = "fixed";
     next.audioFormat = "aac";
-    next.outputExt = "mp4";
   }
   if (preset === "sns") {
     next.width = 854;
@@ -224,7 +217,6 @@ function applyPreset(preset: string): void {
     next.fpsMode = "fixed";
     next.frameRate = 30;
     next.audioFormat = "aac";
-    next.outputExt = "mp4";
   }
   if (preset === "custom") {
     Object.assign(next, appState.defaults);
@@ -256,7 +248,21 @@ async function handleFilePath(filePath: string): Promise<void> {
   setProgress(0);
   appendLog(`入力ファイル: ${filePath}`);
   await probeAndFillDefaults(filePath);
+  try {
+    await generateThumbnail(filePath);
+  } catch {
+    elements.thumbnailImage.classList.remove("visible");
+    elements.thumbnailImage.removeAttribute("src");
+    elements.thumbnailEmpty.classList.add("visible");
+  }
   appendLog("ffprobe で初期値を反映しました");
+}
+
+async function generateThumbnail(filePath: string): Promise<void> {
+  const thumbnailDataUrl = await invoke<string>("generate_thumbnail", { inputPath: filePath });
+  elements.thumbnailImage.src = thumbnailDataUrl;
+  elements.thumbnailImage.classList.add("visible");
+  elements.thumbnailEmpty.classList.remove("visible");
 }
 
 async function pickInputFileWithNativeDialog(): Promise<void> {
@@ -346,8 +352,7 @@ elements.dropZone.addEventListener("drop", async (event) => {
   }
 });
 
-elements.fileInput.addEventListener("click", (event) => {
-  event.preventDefault();
+elements.fileSelectButton.addEventListener("click", () => {
   void pickInputFileWithNativeDialog();
 });
 
@@ -390,58 +395,66 @@ elements.resolutionTemplate.addEventListener("change", () => {
   appendLog(`解像度テンプレート適用: ${value}`);
 });
 
+const markResolutionTemplateAsCustom = () => {
+  if (elements.resolutionTemplate.value !== "custom") {
+    elements.resolutionTemplate.value = "custom";
+  }
+};
+
+elements.width.addEventListener("input", markResolutionTemplateAsCustom);
+elements.height.addEventListener("input", markResolutionTemplateAsCustom);
+
 document.querySelectorAll<HTMLButtonElement>(".reset").forEach((button) => {
   button.addEventListener("click", () => {
     if (!appState.defaults) {
       return;
     }
-    const key = button.dataset.key as keyof ConvertOptions;
+    const key = button.dataset.key;
+    if (!key) {
+      return;
+    }
     const options = getCurrentOptions();
-    options[key] = appState.defaults[key] as never;
+    if (key === "resolution") {
+      options.width = appState.defaults.width;
+      options.height = appState.defaults.height;
+      elements.resolutionTemplate.value = "custom";
+    } else if (key === "frame") {
+      options.frameRate = appState.defaults.frameRate;
+      options.fpsMode = appState.defaults.fpsMode;
+    } else if (key === "quality") {
+      options.videoBitrateK = appState.defaults.videoBitrateK;
+      options.crf = appState.defaults.crf;
+    } else if (key === "audio") {
+      options.audioFormat = appState.defaults.audioFormat;
+      options.audioBitrateK = appState.defaults.audioBitrateK;
+    } else {
+      return;
+    }
     setOptions(options);
     appendLog(`項目リセット: ${key}`);
   });
 });
 
-elements.setupButton.addEventListener("click", async () => {
-  try {
-    appendLog("FFmpeg 準備を開始します");
-    const result = await invoke<{ source: string; ffmpegPath: string; version: string }>(
-      "ensure_ffmpeg_ready"
-    );
-    appendLog(`FFmpeg 準備完了: source=${result.source}, version=${result.version}`);
-    appendLog(`ffmpeg path: ${result.ffmpegPath}`);
-  } catch (error) {
-    appendLog(`FFmpeg 準備失敗: ${formatBackendError(error)}`);
-  }
-});
-
-elements.previewButton.addEventListener("click", async () => {
-  if (!appState.inputPath) {
-    appendLog("入力ファイルを選択してください");
-    return;
-  }
-  try {
-    const preview = await invoke<{ outputPath: string; args: string[] }>("preview_convert_command", {
-      inputPath: appState.inputPath,
-      options: getCurrentOptions()
-    });
-    appendLog(`出力先: ${preview.outputPath}`);
-    appendLog(`ffmpeg ${preview.args.join(" ")}`);
-  } catch (error) {
-    appendLog(`コマンド生成失敗: ${formatBackendError(error)}`);
-  }
-});
-
-elements.convertButton.addEventListener("click", async () => {
-  if (!appState.inputPath) {
-    appendLog("入力ファイルを選択してください");
-    return;
-  }
+elements.actionButton.addEventListener("click", async () => {
   if (appState.converting) {
-    appendLog("変換中です");
+    try {
+      const result = await invoke<{ requested: boolean }>("cancel_convert");
+      if (result.requested) {
+        appendLog("キャンセル要求を送信しました");
+      } else {
+        appendLog("キャンセル対象のプロセスが見つかりません");
+      }
+    } catch (error) {
+      appendLog(`キャンセル失敗: ${formatBackendError(error)}`);
+    }
     return;
   }
+
+  if (!appState.inputPath) {
+    appendLog("入力ファイルを選択してください");
+    return;
+  }
+
   try {
     setConvertingState(true);
     setProgress(0);
@@ -462,25 +475,10 @@ elements.convertButton.addEventListener("click", async () => {
   }
 });
 
-elements.cancelButton.addEventListener("click", async () => {
-  if (!appState.converting) {
-    appendLog("現在は変換中ではありません");
-    return;
-  }
-  try {
-    const result = await invoke<{ requested: boolean }>("cancel_convert");
-    if (result.requested) {
-      appendLog("キャンセル要求を送信しました");
-    } else {
-      appendLog("キャンセル対象のプロセスが見つかりません");
-    }
-  } catch (error) {
-    appendLog(`キャンセル失敗: ${formatBackendError(error)}`);
-  }
-});
-
 async function bootstrap(): Promise<void> {
   setConvertingState(false);
+  elements.thumbnailImage.classList.remove("visible");
+  elements.thumbnailEmpty.classList.add("visible");
 
   try {
     await listen<{ message: string }>("convert-log", (event) => {
