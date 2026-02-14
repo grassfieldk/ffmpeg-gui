@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FFmpeg GUI</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main class="container">
+      <h1>FFmpeg GUI</h1>
+
+      <section class="panel">
+        <h2>入力</h2>
+        <label id="drop-zone" class="drop-zone" for="file-input">
+          ここに動画をドロップ（1件のみ）
+        </label>
+        <input id="file-input" type="file" accept="video/*" />
+        <p id="file-name">未選択</p>
+      </section>
+
+      <section class="panel">
+        <h2>変換</h2>
+
+        <div class="row">
+          <label for="preset">プリセット</label>
+          <select id="preset">
+            <option value="custom">カスタム</option>
+            <option value="edit">編集用</option>
+            <option value="sns">SNS投稿用</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label for="resolution-template">解像度テンプレート</label>
+          <select id="resolution-template">
+            <option value="custom">カスタム</option>
+            <option value="480-landscape">480p 横</option>
+            <option value="480-portrait">480p 縦</option>
+            <option value="720-landscape">720p 横</option>
+            <option value="720-portrait">720p 縦</option>
+            <option value="1080-landscape">1080p 横</option>
+            <option value="1080-portrait">1080p 縦</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label for="width">解像度 (幅)</label>
+          <input id="width" type="number" min="1" />
+          <button class="reset" data-key="width">リセット</button>
+        </div>
+
+        <div class="row">
+          <label for="height">解像度 (高さ)</label>
+          <input id="height" type="number" min="1" />
+          <button class="reset" data-key="height">リセット</button>
+        </div>
+
+        <div class="row">
+          <label for="video-bitrate">動画ビットレート (k)</label>
+          <input id="video-bitrate" type="number" min="1" />
+          <button class="reset" data-key="videoBitrateK">リセット</button>
+        </div>
+
+        <div class="row">
+          <label for="fps-mode">フレームレート形式</label>
+          <select id="fps-mode">
+            <option value="fixed">固定</option>
+            <option value="variable">可変</option>
+          </select>
+          <button class="reset" data-key="fpsMode">リセット</button>
+        </div>
+
+        <div class="row">
+          <label for="framerate">フレームレート</label>
+          <input id="framerate" type="number" min="1" step="0.01" />
+          <button class="reset" data-key="frameRate">リセット</button>
+        </div>
+
+        <div class="row">
+          <label for="audio-format">音声フォーマット</label>
+          <select id="audio-format">
+            <option value="aac">aac</option>
+            <option value="mp3">mp3</option>
+            <option value="opus">opus</option>
+          </select>
+          <button class="reset" data-key="audioFormat">リセット</button>
+        </div>
+
+        <div class="row">
+          <label for="audio-bitrate">音声ビットレート (k)</label>
+          <input id="audio-bitrate" type="number" min="1" />
+          <button class="reset" data-key="audioBitrateK">リセット</button>
+        </div>
+
+        <div class="row">
+          <label for="crf">画質 (CRF)</label>
+          <input id="crf" type="number" min="0" max="51" />
+          <button class="reset" data-key="crf">リセット</button>
+        </div>
+
+        <div class="row">
+          <label for="extension">出力拡張子</label>
+          <input id="extension" type="text" readonly />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>出力</h2>
+        <button id="setup-button">FFmpeg 準備</button>
+        <button id="preview-button">変換コマンドを確認</button>
+        <button id="convert-button">変換を実行</button>
+        <button id="cancel-button">変換をキャンセル</button>
+        <div class="row">
+          <label for="progress">進捗</label>
+          <progress id="progress" max="100" value="0"></progress>
+          <span id="progress-text">0%</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>ログ</h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+  </body>
+  </html>
