@@ -1,6 +1,7 @@
 import "./style.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type ProbeResult = {
   width: number;
@@ -139,6 +140,46 @@ function formatBackendError(error: unknown): string {
   return raw;
 }
 
+function isAbsolutePath(path: string): boolean {
+  return /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/.test(path);
+}
+
+function getPathFromFileInput(file: File): string | null {
+  const maybePath = (file as File & { path?: string }).path;
+  if (!maybePath || !isAbsolutePath(maybePath)) {
+    return null;
+  }
+  return maybePath;
+}
+
+function getPathFromUriList(uriListText: string): string | null {
+  const first = uriListText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith("#"));
+
+  if (!first || !first.startsWith("file://")) {
+    return null;
+  }
+
+  try {
+    const url = new URL(first);
+    const decoded = decodeURIComponent(url.pathname || "");
+    if (!decoded) {
+      return null;
+    }
+    if (url.hostname) {
+      return `\\\\${url.hostname}${decoded.replace(/\//g, "\\")}`;
+    }
+    if (/^\/[a-zA-Z]:\//.test(decoded)) {
+      return decoded.slice(1).replace(/\//g, "\\");
+    }
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
 function getCurrentOptions(): ConvertOptions {
   return {
     width: Number(elements.width.value),
@@ -218,22 +259,55 @@ async function handleFilePath(filePath: string): Promise<void> {
   appendLog("ffprobe で初期値を反映しました");
 }
 
-elements.fileInput.addEventListener("change", async (event) => {
-  const target = event.target as HTMLInputElement;
-  if ((target.files?.length ?? 0) > 1) {
-    appendLog("入力は1ファイルのみです");
-    return;
-  }
-  const file = target.files?.[0];
-  if (!file) {
-    return;
-  }
-  const path = (file as File & { path?: string }).path ?? file.name;
+async function pickInputFileWithNativeDialog(): Promise<void> {
   try {
-    await handleFilePath(path);
+    const selectedPath = await invoke<string | null>("pick_input_file");
+    if (!selectedPath) {
+      appendLog("ファイル選択をキャンセルしました");
+      return;
+    }
+    await handleFilePath(selectedPath);
   } catch (error) {
-    appendLog(`ファイル読み込みエラー: ${String(error)}`);
+    appendLog(`ファイル選択エラー: ${formatBackendError(error)}`);
   }
+}
+
+async function setupNativeDragDrop(): Promise<void> {
+  try {
+    await getCurrentWindow().onDragDropEvent(async (event) => {
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        elements.dropZone.classList.add("dragover");
+        return;
+      }
+
+      elements.dropZone.classList.remove("dragover");
+
+      if (event.payload.type !== "drop") {
+        return;
+      }
+
+      const { paths } = event.payload;
+      if (!paths.length) {
+        return;
+      }
+      if (paths.length > 1) {
+        appendLog("入力は1ファイルのみです。先頭ファイルだけ受け付けます。");
+      }
+      try {
+        await handleFilePath(paths[0]);
+      } catch (error) {
+        appendLog(`ドロップ処理エラー: ${String(error)}`);
+      }
+    });
+  } catch (_error) {}
+}
+
+window.addEventListener("dragover", (event) => {
+  event.preventDefault();
+});
+
+window.addEventListener("drop", (event) => {
+  event.preventDefault();
 });
 
 elements.dropZone.addEventListener("dragover", (event) => {
@@ -248,19 +322,55 @@ elements.dropZone.addEventListener("dragleave", () => {
 elements.dropZone.addEventListener("drop", async (event) => {
   event.preventDefault();
   elements.dropZone.classList.remove("dragover");
-  const count = event.dataTransfer?.files?.length ?? 0;
-  if (count > 1) {
-    appendLog("入力は1ファイルのみです。先頭ファイルだけ受け付けます。");
-  }
-  const file = event.dataTransfer?.files?.[0];
-  if (!file) {
+
+  const files = event.dataTransfer?.files;
+  if (!files?.length) {
     return;
   }
-  const path = (file as File & { path?: string }).path ?? file.name;
+  if (files.length > 1) {
+    appendLog("入力は1ファイルのみです。先頭ファイルだけ受け付けます。");
+  }
+
+  const pathFromFile = getPathFromFileInput(files[0]);
+  const pathFromUriList = getPathFromUriList(event.dataTransfer?.getData("text/uri-list") ?? "");
+  const path = pathFromFile ?? pathFromUriList;
+  if (!path) {
+    appendLog("ドロップされたファイルの絶対パスを取得できませんでした（ネイティブD&Dを確認してください）");
+    return;
+  }
+
   try {
     await handleFilePath(path);
   } catch (error) {
     appendLog(`ドロップ処理エラー: ${String(error)}`);
+  }
+});
+
+elements.fileInput.addEventListener("click", (event) => {
+  event.preventDefault();
+  void pickInputFileWithNativeDialog();
+});
+
+elements.fileInput.addEventListener("change", async (event) => {
+  const target = event.target as HTMLInputElement;
+  if ((target.files?.length ?? 0) > 1) {
+    appendLog("入力は1ファイルのみです");
+    return;
+  }
+  const file = target.files?.[0];
+  if (!file) {
+    return;
+  }
+  const path = getPathFromFileInput(file);
+  if (!path) {
+    appendLog("ブラウザ経由では絶対パスを取得できないため、ネイティブ選択ダイアログを開きます");
+    await pickInputFileWithNativeDialog();
+    return;
+  }
+  try {
+    await handleFilePath(path);
+  } catch (error) {
+    appendLog(`ファイル読み込みエラー: ${String(error)}`);
   }
 });
 
@@ -369,12 +479,37 @@ elements.cancelButton.addEventListener("click", async () => {
   }
 });
 
-await listen<{ message: string }>("convert-log", (event) => {
-  if (event.payload?.message) {
-    updateProgressFromLogLine(event.payload.message);
-    appendLog(event.payload.message);
-  }
-});
+async function bootstrap(): Promise<void> {
+  setConvertingState(false);
 
-setConvertingState(false);
-appendLog("アプリ起動");
+  try {
+    await listen<{ message: string }>("convert-log", (event) => {
+      if (event.payload?.message) {
+        updateProgressFromLogLine(event.payload.message);
+        appendLog(event.payload.message);
+      }
+    });
+  } catch (_error) {}
+
+  try {
+    await listen<string>("native-file-drop", async (event) => {
+      const path = event.payload;
+      if (!path) {
+        return;
+      }
+      try {
+        await handleFilePath(path);
+      } catch (error) {
+        appendLog(`ネイティブドロップ処理エラー: ${String(error)}`);
+      }
+    });
+  } catch (_error) {}
+
+  try {
+    await setupNativeDragDrop();
+  } catch (_error) {}
+
+  appendLog("アプリ起動");
+}
+
+void bootstrap();

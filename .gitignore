@@ -3,3 +3,5 @@ dist/
 target/
 src-tauri/target/
 *.log
+Thumbs.db
+.DS_Store

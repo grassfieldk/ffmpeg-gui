@@ -412,6 +412,17 @@ fn resolve_ffprobe_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
+fn pick_input_file() -> Option<String> {
+    let selected = rfd::FileDialog::new()
+        .add_filter(
+            "Video",
+            &["mp4", "mov", "mkv", "avi", "webm", "m4v", "flv", "wmv", "ts"],
+        )
+        .pick_file()?;
+    Some(normalize_path(selected.to_string_lossy().as_ref()))
+}
+
+#[tauri::command]
 async fn ensure_ffmpeg_ready(app: tauri::AppHandle) -> Result<FfmpegReady, String> {
     ensure_ffmpeg_internal(&app).await
 }
@@ -579,7 +590,20 @@ pub fn run() {
             current_pid: Mutex::new(None),
             cancel_requested: AtomicBool::new(false),
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(drop_event) = event {
+                if let tauri::DragDropEvent::Drop { paths, .. } = drop_event {
+                    if let Some(path) = paths.first() {
+                        let _ = window.emit(
+                            "native-file-drop",
+                            normalize_path(path.to_string_lossy().as_ref()),
+                        );
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            pick_input_file,
             ensure_ffmpeg_ready,
             probe_video,
             preview_convert_command,
